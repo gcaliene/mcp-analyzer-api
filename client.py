@@ -6,6 +6,7 @@ from langgraph.prebuilt import create_react_agent
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any
 from contextlib import asynccontextmanager
@@ -35,6 +36,13 @@ async def lifespan(app):
     # (Optional) Add cleanup code here
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or specify your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class AskRequest(BaseModel):
     messages: Any
@@ -44,6 +52,7 @@ async def ask(request: AskRequest):
     try:
         agent = app.state.agent
         result = await agent.ainvoke({"messages": request.messages})
+        print('api route', result)
         return JSONResponse({"response": result["messages"][-1].content})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 

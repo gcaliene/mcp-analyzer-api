@@ -39,29 +39,9 @@ def list_repo_files(owner: str, repo: str) -> List[str]:
     return [f['name'] for f in files if f['type'] == 'file']
 
 
-def analyze_files_with_line_counts(owner: str, repo: str) -> list[tuple[str, int]]:
-    api_url = GITHUB_API_URL.format(owner=owner, repo=repo)
-    headers = {"Accept": "application/vnd.github.v3+json"}
-    if GITHUB_TOKEN:
-        headers["Authorization"] = f"token {GITHUB_TOKEN}"
-    resp = requests.get(api_url, headers=headers)
-    if resp.status_code != 200:
-        return []
-    files = resp.json()
-    results = []
-    for f in files:
-        if f['type'] == 'file' and 'download_url' in f and f['download_url']:
-            file_resp = requests.get(f['download_url'])
-            if file_resp.status_code == 200:
-                line_count = len(file_resp.text.splitlines())
-                results.append((f['name'], line_count))
-    return results
-
-
 def analyze_code_unified(source: str, filetype: str) -> dict:
     """Language-agnostic analysis: extract tools (functions), prompts, and resources for any language."""
     import re
-    # Patterns for common languages (expand as needed)
     patterns = {
         'py': r'def\s+(\w+)\s*\(([^)]*)\)',
         'js': r'function\s+(\w+)\s*\(([^)]*)\)',
@@ -74,43 +54,111 @@ def analyze_code_unified(source: str, filetype: str) -> dict:
         'c': r'(?:\w+\s+)+?(\w+)\s*\(([^)]*)\)\s*\{',
         'cs': r'(?:public|private|protected)?\s*(?:static)?\s*\w+\s+(\w+)\s*\(([^)]*)\)',
     }
+    mcp_patterns = {
+        'py': r'@mcp\.tool\s*\(',
+        'go': r'mcp\.NewTool\(',
+        'js': r'mcp\.newTool\(',
+        'ts': r'mcp\.newTool\(',
+        'java': r'new\s+MCPTool\(',
+        'cs': r'new\s+MCPTool\(',
+        # Add more as needed
+    }
     pattern = patterns.get(filetype, r'(\w+)\s*\(([^)]*)\)')
+    mcp_pattern = mcp_patterns.get(filetype)
     functions = []
     prompts = []
     resources = []
     lines = source.splitlines()
-    for i, line in enumerate(lines):
-        # Function/method extraction
-        match = re.search(pattern, line)
-        if match:
-            name = match.group(1)
-            params = match.group(2)
+    if filetype == 'go' or filetype in {'js', 'ts', 'java', 'cs'}:
+        # Special handling: only functions that call MCP tool constructor are MCP tools
+        func_indices = []
+        for i, line in enumerate(lines):
+            match = re.match(pattern, line)
+            if match:
+                func_indices.append((i, match.group(1), match.group(2)))
+        func_indices.append((len(lines), None, None))  # Sentinel for last function
+        for idx in range(len(func_indices) - 1):
+            start, name, params = func_indices[idx]
+            end = func_indices[idx + 1][0]
+            body = '\n'.join(lines[start:end])
             doc = ''
-            for j in range(i-1, max(i-4, -1), -1):
+            for j in range(start-1, max(start-4, -1), -1):
                 comment_line = lines[j].strip()
-                if comment_line.startswith('#') or comment_line.startswith('//') or comment_line.startswith('/*') or comment_line.startswith('*'):
+                if comment_line.startswith('//') or comment_line.startswith('/*') or comment_line.startswith('*'):
                     doc = comment_line + '\n' + doc
                 else:
                     break
-            functions.append({
-                'name': name,
-                'params': params,
-                'doc': doc.strip()
-            })
-        # Prompt/resource extraction (variable assignment)
-        assign_match = re.match(r'\s*(\w+)\s*[=:]', line)
-        if assign_match:
-            var_name = assign_match.group(1).lower()
-            # Prompts
-            if (
-                var_name == 'prompt' or var_name.endswith('_prompt') or var_name == 'prompts' or var_name.endswith('_prompts')
-            ):
-                prompts.append({'name': assign_match.group(1)})
-            # Resources
-            if (
-                var_name == 'resource' or var_name.endswith('_resource') or var_name == 'resources' or var_name.endswith('_resources')
-            ):
-                resources.append({'name': assign_match.group(1)})
+            if mcp_pattern and re.search(mcp_pattern, body):
+                functions.append({
+                    'name': name,
+                    'params': params,
+                    'doc': doc.strip()
+                })
+    elif filetype == 'py':
+        # Only functions decorated with @mcp.tool() are MCP tools
+        for i, line in enumerate(lines):
+            if re.match(r'@mcp\.tool\s*\(', line.strip()):
+                # Look ahead for the next function definition
+                for j in range(i+1, min(i+6, len(lines))):
+                    match = re.match(pattern, lines[j])
+                    if match:
+                        name = match.group(1)
+                        params = match.group(2)
+                        doc = ''
+                        for k in range(j-1, max(j-4, -1), -1):
+                            comment_line = lines[k].strip()
+                            if comment_line.startswith('#') or comment_line.startswith('"""'):
+                                doc = comment_line + '\n' + doc
+                            else:
+                                break
+                        functions.append({
+                            'name': name,
+                            'params': params,
+                            'doc': doc.strip()
+                        })
+                        break
+            # Prompt/resource extraction (variable assignment)
+            assign_match = re.match(r'\s*(\w+)\s*[=:]', line)
+            if assign_match:
+                var_name = assign_match.group(1).lower()
+                if (
+                    var_name == 'prompt' or var_name.endswith('_prompt') or var_name == 'prompts' or var_name.endswith('_prompts')
+                ):
+                    prompts.append({'name': assign_match.group(1)})
+                if (
+                    var_name == 'resource' or var_name.endswith('_resource') or var_name == 'resources' or var_name.endswith('_resources')
+                ):
+                    resources.append({'name': assign_match.group(1)})
+    else:
+        # Fallback: treat all functions as tools (legacy behavior)
+        for i, line in enumerate(lines):
+            match = re.search(pattern, line)
+            if match:
+                name = match.group(1)
+                params = match.group(2)
+                doc = ''
+                for j in range(i-1, max(i-4, -1), -1):
+                    comment_line = lines[j].strip()
+                    if comment_line.startswith('#') or comment_line.startswith('//') or comment_line.startswith('/*') or comment_line.startswith('*'):
+                        doc = comment_line + '\n' + doc
+                    else:
+                        break
+                functions.append({
+                    'name': name,
+                    'params': params,
+                    'doc': doc.strip()
+                })
+            assign_match = re.match(r'\s*(\w+)\s*[=:]', line)
+            if assign_match:
+                var_name = assign_match.group(1).lower()
+                if (
+                    var_name == 'prompt' or var_name.endswith('_prompt') or var_name == 'prompts' or var_name.endswith('_prompts')
+                ):
+                    prompts.append({'name': assign_match.group(1)})
+                if (
+                    var_name == 'resource' or var_name.endswith('_resource') or var_name == 'resources' or var_name.endswith('_resources')
+                ):
+                    resources.append({'name': assign_match.group(1)})
     return {'tools': functions, 'prompts': prompts, 'resources': resources}
 
 def should_ignore_test_file(name: str, path: str, ext: str) -> bool:
@@ -253,7 +301,7 @@ def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
 
 @mcp.tool()
 async def analyze_github_repo(url: str) -> str:
-    """Advanced analysis of a public GitHub repo: functions, classes, comments, imports, MCP server architecture, and more."""
+    """Advanced analysis of a public Model Context Protocol (MCP) server GitHub repo: display MCP server architecture, tools with descriptions and parameters, defined prompts and resources, identify patterns used in server design and visualize the hierarchical structure of the server components. Also will give a basic architectural analysis of the implementation and highlight anything unique or interesting about the implementation."""
     print(f"[analyze_github_repo] Starting analysis for URL: {url}")
     try:
         owner, repo = extract_owner_repo(url)
@@ -270,13 +318,17 @@ async def analyze_github_repo(url: str) -> str:
     summary_lines = []
     mcp_structures = []
     for f in file_analyses:
-        line = f"{f['name']} ({f['type']}): {f['lines']} lines"
+        line = f"{f['name']} ({f['type']})"
         # Always extract tools, prompts, resources from mcp_analysis
         mcp_analysis = f.get('mcp_analysis', {})
         tools = mcp_analysis.get('tools', [])
         prompts = mcp_analysis.get('prompts', [])
         resources = mcp_analysis.get('resources', [])
         print(f"[analyze_github_repo] Analyzing file: {f['name']} ({f['type']})")
+        # Only add to summary if there is at least one tool, prompt, or resource
+        if not (tools or prompts or resources):
+            print(f"[analyze_github_repo] Skipping {f['name']} ({f['type']}) - no tools, prompts, or resources found.")
+            continue
         # MCP server breakdown (for architecture summary, all languages)
         mcp = mcp_analysis
         if 'servers' in mcp and mcp['servers']:
@@ -328,7 +380,7 @@ async def analyze_github_repo(url: str) -> str:
                     summary_lines.append(f"    └─ {resource['name']}")
     print(f"[analyze_github_repo] Summary generation complete.")
     summary = f"Advanced analysis for repo {owner}/{repo}:\n" + "\n".join(summary_lines)
-    print(summary)
+    print("summary", summary)
     return summary
 
 
