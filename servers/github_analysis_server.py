@@ -177,6 +177,67 @@ def analyze_code_generic(source: str, filetype: str) -> dict:
     return {'functions': functions}
 
 
+def should_ignore_test_file(name: str, path: str, ext: str) -> bool:
+    """Return True if the file should be ignored as a test file (unit, integration, or e2e). Covers all languages and common patterns."""
+    lower_name = name.lower()
+    lower_path = path.lower()
+    # Common test file patterns (unit, integration, e2e, spec)
+    test_keywords = [
+        'test', 'tests', 'spec', 'e2e', 'integration', 'unittest', 'it', 'describe'
+    ]
+    # Check for keywords in name or path
+    if any(kw in lower_name or kw in lower_path for kw in test_keywords):
+        return True
+    # Common suffixes and prefixes for test files
+    suffixes = [
+        '_test', '_tests', '.spec', '.e2e', '.integration', '.unittest', '.it', '.describe'
+    ]
+    for suf in suffixes:
+        if lower_name.endswith(f'{suf}.{ext}') or lower_name.endswith(suf):
+            return True
+    prefixes = ['test_', 'spec_', 'e2e_', 'integration_', 'unittest_', 'it_', 'describe_']
+    for pre in prefixes:
+        if lower_name.startswith(pre):
+            return True
+    # Language-specific patterns
+    # JS/TS: .spec.js, .e2e.ts, .test.js, .test.ts
+    if ext in {'js', 'ts'} and (
+        lower_name.endswith('.spec.' + ext) or lower_name.endswith('.e2e.' + ext) or lower_name.endswith('.test.' + ext)
+    ):
+        return True
+    # Python: test_*.py, *_test.py, *_spec.py, *_e2e.py
+    if ext == 'py' and (
+        lower_name.startswith('test_') or lower_name.endswith('_test.py') or lower_name.endswith('_spec.py') or lower_name.endswith('_e2e.py')
+    ):
+        return True
+    # Java: *Test.java, *Tests.java, *Spec.java, *E2E.java
+    if ext == 'java' and (
+        lower_name.endswith('test.java') or lower_name.endswith('tests.java') or lower_name.endswith('spec.java') or lower_name.endswith('e2e.java')
+    ):
+        return True
+    # Go: *_test.go, *_e2e.go
+    if ext == 'go' and (
+        lower_name.endswith('_test.go') or lower_name.endswith('_e2e.go')
+    ):
+        return True
+    # Ruby: *_spec.rb, *_test.rb, *_e2e.rb
+    if ext == 'rb' and (
+        lower_name.endswith('_spec.rb') or lower_name.endswith('_test.rb') or lower_name.endswith('_e2e.rb')
+    ):
+        return True
+    # PHP: *Test.php, *Spec.php, *E2E.php
+    if ext == 'php' and (
+        lower_name.endswith('test.php') or lower_name.endswith('spec.php') or lower_name.endswith('e2e.php')
+    ):
+        return True
+    # C/C++/C#: *Test.c, *Test.cpp, *Test.cs, *Spec.c, *E2E.cpp, etc.
+    if ext in {'c', 'cpp', 'cs'} and (
+        lower_name.endswith('test.' + ext) or lower_name.endswith('spec.' + ext) or lower_name.endswith('e2e.' + ext)
+    ):
+        return True
+    return False
+
+
 def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
     api_url = GITHUB_API_URL.format(owner=owner, repo=repo)
     if path:
@@ -194,8 +255,27 @@ def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
     files = resp.json()
     print(f"[analyze_files_advanced] {len(files)} items found at {api_url}")
     results = []
+    # Extensions and names to ignore
+    ignore_exts = {"md", "json", "toml", "ini", "env", "cfg", "conf", "yml", "yaml"}
+    ignore_names = {"Dockerfile"}
+    ignore_patterns = ["docker-compose", ".github/", ".gitlab/", ".github", ".gitlab"]
+    # Extensions to analyze (code files)
+    code_exts = {"py", "js", "ts", "java", "go", "rb", "php", "cpp", "c", "cs"}
     for f in files:
+        ext = f['name'].split('.')[-1] if '.' in f['name'] else ''
+        # Use the new test file ignore function
+        if should_ignore_test_file(f['name'], f['path'], ext):
+            print(f"[analyze_files_advanced] Skipping test file: {f['path']}")
+            continue
         if f['type'] == 'file' and 'download_url' in f and f['download_url']:
+            # Skip ignored files
+            if ext in ignore_exts or f['name'] in ignore_names or any(p in f['path'] for p in ignore_patterns):
+                print(f"[analyze_files_advanced] Skipping ignored file: {f['path']}")
+                continue
+            # Only analyze code files
+            if ext not in code_exts:
+                print(f"[analyze_files_advanced] Skipping non-code file: {f['path']}")
+                continue
             print(f"[analyze_files_advanced] Analyzing file: {f['path']}")
             file_resp = requests.get(f['download_url'])
             if file_resp.status_code == 200:
@@ -203,19 +283,15 @@ def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
                 lines = content.splitlines()
                 file_info = {
                     "name": f["path"],
-                    "type": f['name'].split('.')[-1] if '.' in f['name'] else 'unknown',
+                    "type": ext if ext else 'unknown',
                     "lines": len(lines),
                     "non_empty_lines": sum(1 for line in lines if line.strip()),
                     "size_bytes": len(content.encode('utf-8')),
                 }
-                ext = file_info['type']
                 if ext == 'py':
                     print(f"[analyze_files_advanced] Running MCP and Python analysis on: {f['path']}")
                     file_info["mcp_analysis"] = analyze_mcp_server_code(content)
                     file_info["python_analysis"] = analyze_python_code(content)
-                elif ext == 'md':
-                    print(f"[analyze_files_advanced] Running Markdown analysis on: {f['path']}")
-                    file_info["markdown_analysis"] = analyze_markdown_code(content)
                 else:
                     print(f"[analyze_files_advanced] Running generic analysis on: {f['path']}")
                     file_info["generic_analysis"] = analyze_code_generic(content, ext)
@@ -226,6 +302,7 @@ def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
             sub_path = f['path']
             if not sub_path.startswith('/'):
                 sub_path = '/' + sub_path
+            print(f"[analyze_files_advanced] Traversing into folder: {sub_path} to check its contents.")
             print(f"[analyze_files_advanced] Entering directory: {sub_path}")
             sub_results = analyze_files_advanced(owner, repo, sub_path)
             results.extend(sub_results)
@@ -239,7 +316,7 @@ async def analyze_github_repo(url: str) -> str:
     print(f"[analyze_github_repo] Starting analysis for URL: {url}")
     try:
         owner, repo = extract_owner_repo(url)
-        print(f"[analyze_github_repo] Extracted owner: {owner}, repo: {repo}")
+        print(f"[analyze_github_repo] Extracted owners1: {owner}, repo: {repo}")
     except Exception as e:
         print(f"[analyze_github_repo] Error extracting owner/repo: {e}")
         return f"Error: {e}"
