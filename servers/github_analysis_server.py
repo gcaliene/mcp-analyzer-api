@@ -113,93 +113,6 @@ def analyze_code_unified(source: str, filetype: str) -> dict:
                 resources.append({'name': assign_match.group(1)})
     return {'tools': functions, 'prompts': prompts, 'resources': resources}
 
-
-def analyze_markdown_code(source: str) -> dict:
-    headings = [line for line in source.splitlines() if line.strip().startswith('#')]
-    return {"heading_count": len(headings)}
-
-
-def analyze_mcp_server_code(source: str) -> dict:
-    """Analyze MCP server Python code for server architecture, tools, prompts, and resources."""
-    try:
-        tree = ast.parse(source)
-    except Exception:
-        return {"error": "Failed to parse Python file"}
-    servers = []
-    tools = []
-    prompts = []
-    resources = []
-    class MCPVisitor(ast.NodeVisitor):
-        def __init__(self):
-            self.servers = []
-            self.tools = []
-            self.prompts = []
-            self.resources = []
-            self.current_server = None
-
-        def visit_Assign(self, node):
-            # Look for mcp = FastMCP("Server Name")
-            if isinstance(node.value, ast.Call) and getattr(node.value.func, 'id', None) == 'FastMCP':
-                if node.value.args and isinstance(node.value.args[0], ast.Constant):
-                    self.current_server = node.targets[0].id
-                    self.servers.append({
-                        "var": self.current_server,
-                        "name": node.value.args[0].value,
-                        "tools": [],
-                        "prompts": [],
-                        "resources": []
-                    })
-            # Look for prompt/resource assignments
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    var_name = target.id.lower()
-                    # Prompts
-                    if (
-                        var_name == 'prompt' or var_name.endswith('_prompt') or var_name == 'prompts' or var_name.endswith('_prompts')
-                    ):
-                        value = ast.get_docstring(node) if ast.get_docstring(node) else ''
-                        self.prompts.append({
-                            "name": target.id,
-                            "value": value
-                        })
-                    # Resources
-                    if (
-                        var_name == 'resource' or var_name.endswith('_resource') or var_name == 'resources' or var_name.endswith('_resources')
-                    ):
-                        value = ast.get_docstring(node) if ast.get_docstring(node) else ''
-                        self.resources.append({
-                            "name": target.id,
-                            "value": value
-                        })
-            self.generic_visit(node)
-
-        def visit_FunctionDef(self, node):
-            # Look for @mcp.tool() decorator
-            for decorator in node.decorator_list:
-                if isinstance(decorator, ast.Call) and getattr(getattr(decorator.func, 'attr', None), 'lower', lambda: None)() == 'tool':
-                    # Find which server this tool is registered to (assume 'mcp' by default)
-                    server_var = 'mcp'
-                    docstring = ast.get_docstring(node) or ''
-                    params = [arg.arg + (f': {ast.unparse(arg.annotation)}' if arg.annotation else '') for arg in node.args.args]
-                    tool_info = {
-                        "name": node.name,
-                        "params": params,
-                        "doc": docstring,
-                        "server_var": server_var
-                    }
-                    self.tools.append(tool_info)
-            self.generic_visit(node)
-
-    visitor = MCPVisitor()
-    visitor.visit(tree)
-    # Attach tools, prompts, and resources to servers
-    for server in visitor.servers:
-        server["tools"] = [t for t in visitor.tools if t["server_var"] == server["var"]]
-        server["prompts"] = visitor.prompts
-        server["resources"] = visitor.resources
-    return {"servers": visitor.servers, "tools": visitor.tools, "prompts": visitor.prompts, "resources": visitor.resources}
-
-
 def should_ignore_test_file(name: str, path: str, ext: str) -> bool:
     """Return True if the file should be ignored as a test file (unit, integration, or e2e). Covers all languages and common patterns."""
     lower_name = name.lower()
@@ -334,6 +247,7 @@ def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
             sub_results = analyze_files_advanced(owner, repo, sub_path)
             results.extend(sub_results)
     print(f"[analyze_files_advanced] Completed analysis for: {api_url}")
+    print("!!!!!!!results", results)
     return results
 
 
@@ -357,20 +271,41 @@ async def analyze_github_repo(url: str) -> str:
     mcp_structures = []
     for f in file_analyses:
         line = f"{f['name']} ({f['type']}): {f['lines']} lines"
-        # Python MCP server breakdown
-        if f['type'] == 'py' and 'mcp_analysis' in f:
-            mcp = f['mcp_analysis']
-            if 'servers' in mcp and mcp['servers']:
-                for server in mcp['servers']:
-                    mcp_structures.append(server)
-                    print(f"[analyze_github_repo] MCP server found: {server['name']} with {len(server['tools'])} tools.")
-        # Generic function breakdown for all languages
-        if 'generic_analysis' in f and f['generic_analysis']['functions']:
-            line += "\n  Functions:"
-            for func in f['generic_analysis']['functions']:
-                line += f"\n    └─ {func['name']}({func['params']})"
-                if func['doc']:
-                    line += f"\n        Description: {func['doc']}"
+        # Always extract tools, prompts, resources from mcp_analysis
+        mcp_analysis = f.get('mcp_analysis', {})
+        tools = mcp_analysis.get('tools', [])
+        prompts = mcp_analysis.get('prompts', [])
+        resources = mcp_analysis.get('resources', [])
+        print(f"[analyze_github_repo] Analyzing file: {f['name']} ({f['type']})")
+        # MCP server breakdown (for architecture summary, all languages)
+        mcp = mcp_analysis
+        if 'servers' in mcp and mcp['servers']:
+            for server in mcp['servers']:
+                mcp_structures.append(server)
+                print(f"[analyze_github_repo] MCP server found: {server['name']} with {len(server['tools'])} tools.")
+        # Add tools
+        if tools:
+            print(f"[analyze_github_repo] Found {len(tools)} tool(s) in {f['name']}")
+            line += "\n  Tools:"
+            for tool in tools:
+                params = tool.get('params', '')
+                if isinstance(params, list):
+                    params = ', '.join(params)
+                line += f"\n    └─ {tool['name']}({params})"
+                if tool.get('doc'):
+                    line += f"\n        Description: {tool['doc']}"
+        # Add prompts
+        if prompts:
+            print(f"[analyze_github_repo] Found {len(prompts)} prompt(s) in {f['name']}")
+            line += "\n  Prompts:"
+            for prompt in prompts:
+                line += f"\n    └─ {prompt['name']}"
+        # Add resources
+        if resources:
+            print(f"[analyze_github_repo] Found {len(resources)} resource(s) in {f['name']}")
+            line += "\n  Resources:"
+            for resource in resources:
+                line += f"\n    └─ {resource['name']}"
         summary_lines.append(line)
     # Add MCP server architecture breakdown
     if mcp_structures:
@@ -393,6 +328,7 @@ async def analyze_github_repo(url: str) -> str:
                     summary_lines.append(f"    └─ {resource['name']}")
     print(f"[analyze_github_repo] Summary generation complete.")
     summary = f"Advanced analysis for repo {owner}/{repo}:\n" + "\n".join(summary_lines)
+    print(summary)
     return summary
 
 
