@@ -15,7 +15,7 @@ llm = ChatAnthropic(
 async def main():
     client = MultiServerMCPClient(
         {
-            "weather": {
+            "github_analysis": {
                 "url": "http://localhost:8000/sse",
                 "transport": "sse",
             },
@@ -24,7 +24,7 @@ async def main():
     tools = await client.get_tools()
     agent = create_react_agent(llm, tools)
     result = await agent.ainvoke(
-        {"messages": "What is the weather in San Francisco?"}
+        {"messages": "https://github.com/langchain-ai/react-agent"}
     )
     print(result["messages"][-1].content)
 
