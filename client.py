@@ -52,7 +52,7 @@ async def ask(request: AskRequest):
     try:
         agent = app.state.agent
         print("ask", request.messages)
-        prompt_template = f"""List all MCP tools (include descriptions and parameters), prompts, and resources from this url: {request.messages}"""
+        prompt_template = f"""List all MCP tools (include descriptions and parameters), prompts, and resources from this url: {request.messages}, along with the hierarchical structure of the server components. Prioritize listing all MCP tools with descriptions and its' parameters."""
         result = await agent.ainvoke({"messages": prompt_template})
         print('api route', result)
         return JSONResponse({"response": result["messages"][-1].content})

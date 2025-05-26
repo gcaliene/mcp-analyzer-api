@@ -3,6 +3,8 @@ import requests
 import re
 from urllib.parse import quote
 
+IGNORE_DIRS = {'third-party'}
+
 def analyze_code_unified(source: str, filetype: str) -> dict:
     patterns = {
         'py': r'def\s+(\w+)\s*\(([^)]*)\)',
@@ -49,10 +51,26 @@ def analyze_code_unified(source: str, filetype: str) -> dict:
                 else:
                     break
             if mcp_pattern and re.search(mcp_pattern, body):
+                param_list = [p.strip() for p in params.split(',') if p.strip()]
                 functions.append({
                     'name': name,
-                    'params': params,
-                    'doc': doc.strip()
+                    'params': param_list,
+                    'description': doc.strip()
+                })
+            if 'mcp.NewTool' in body:
+                tool_name_match = re.search(r'mcp.NewTool\(["\']([\w_]+)["\']', body)
+                tool_name = tool_name_match.group(1) if tool_name_match else name
+                desc_match = re.search(r'mcp.WithDescription\([^\)]*["\'](.+?)["\']', body)
+                tool_desc = desc_match.group(1) if desc_match else ''
+                param_pattern = re.compile(r'mcp.With(?:String|Number|Bool|Int|Float)\(["\']([\w_]+)["\'][^)]*mcp.Description\(["\'](.+?)["\']', re.DOTALL)
+                parameters = []
+                for p_match in param_pattern.finditer(body):
+                    pname, pdesc = p_match.group(1), p_match.group(2)
+                    parameters.append({"name": pname, "description": pdesc})
+                functions.append({
+                    'name': tool_name,
+                    'parameters': parameters,
+                    'description': tool_desc
                 })
     elif filetype == 'py':
         for i, line in enumerate(lines):
@@ -69,10 +87,11 @@ def analyze_code_unified(source: str, filetype: str) -> dict:
                                 doc = comment_line + '\n' + doc
                             else:
                                 break
+                        param_list = [p.strip() for p in params.split(',') if p.strip()]
                         functions.append({
                             'name': name,
-                            'params': params,
-                            'doc': doc.strip()
+                            'params': param_list,
+                            'description': doc.strip()
                         })
                         break
             assign_match = re.match(r'\s*(\w+)\s*[=:]', line)
@@ -99,10 +118,11 @@ def analyze_code_unified(source: str, filetype: str) -> dict:
                         doc = comment_line + '\n' + doc
                     else:
                         break
+                param_list = [p.strip() for p in params.split(',') if p.strip()]
                 functions.append({
                     'name': name,
-                    'params': params,
-                    'doc': doc.strip()
+                    'params': param_list,
+                    'description': doc.strip()
                 })
             assign_match = re.match(r'\s*(\w+)\s*[=:]', line)
             if assign_match:
@@ -142,6 +162,9 @@ def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
     code_exts = {"py", "js", "ts", "java", "go", "rb", "php", "cpp", "c", "cs"}
     for f in files:
         ext = f['name'].split('.')[-1] if '.' in f['name'] else ''
+        if any(ignore in f['name'].lower() or ignore in f['path'].lower() for ignore in IGNORE_DIRS):
+            print(f"[analyze_files_advanced] Skipping due to ignore dir: {f['path']}")
+            continue
         if should_ignore_test_file(f['name'], f['path'], ext):
             print(f"[analyze_files_advanced] Skipping test file: {f['path']}")
             continue
