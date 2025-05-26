@@ -1,0 +1,10 @@
+from .python_analysis import extract_functions as extract_python
+from .go_analysis import extract_functions as extract_go
+from .js_analysis import extract_functions as extract_js
+from .ts_analysis import extract_functions as extract_ts
+from .java_analysis import extract_functions as extract_java
+from .cs_analysis import extract_functions as extract_cs
+from .rb_analysis import extract_functions as extract_rb
+from .php_analysis import extract_functions as extract_php
+from .cpp_analysis import extract_functions as extract_cpp
+from .c_analysis import extract_functions as extract_c 
