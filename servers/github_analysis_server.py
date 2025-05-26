@@ -84,8 +84,8 @@ def analyze_markdown_code(source: str) -> dict:
     return {"heading_count": len(headings)}
 
 
-def analyze_files_advanced(owner: str, repo: str) -> list[dict]:
-    api_url = GITHUB_API_URL.format(owner=owner, repo=repo)
+def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
+    api_url = GITHUB_API_URL.format(owner=owner, repo=repo) + path
     headers = {"Accept": "application/vnd.github.v3+json"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
@@ -99,16 +99,23 @@ def analyze_files_advanced(owner: str, repo: str) -> list[dict]:
             file_resp = requests.get(f['download_url'])
             if file_resp.status_code == 200:
                 content = file_resp.text
+                lines = content.splitlines()
                 file_info = {
-                    "name": f['name'],
+                    "name": f["path"],
                     "type": f['name'].split('.')[-1] if '.' in f['name'] else 'unknown',
-                    "lines": len(content.splitlines()),
+                    "lines": len(lines),
+                    "non_empty_lines": sum(1 for line in lines if line.strip()),
+                    "size_bytes": len(content.encode('utf-8')),
                 }
+                # Optional: language-specific analysis
                 if f['name'].endswith('.py'):
                     file_info["python_analysis"] = analyze_python_code(content)
                 elif f['name'].endswith('.md'):
                     file_info["markdown_analysis"] = analyze_markdown_code(content)
                 results.append(file_info)
+        elif f['type'] == 'dir' and 'path' in f:
+            sub_results = analyze_files_advanced(owner, repo, f['path'])
+            results.extend(sub_results)
     return results
 
 
