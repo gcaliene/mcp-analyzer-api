@@ -12,7 +12,7 @@ mcp = FastMCP("GitHub Analysis MCP Server")
 
 @mcp.tool()
 async def analyze_github_repo(url: str) -> str:
-    """Analysis of a Model Context Protocol (MCP) server GitHub repo: list all MCP tools with descriptions and the tool's function parameters, list all defined prompts and resources, identify patterns used in server design and visualize the hierarchical structure of the server components."""
+    """Analysis of a Model Context Protocol (MCP) server GitHub repo: list all MCP tools with descriptions and its' parameters, list all defined prompts and resources, identify patterns used in server design and visualize the hierarchical structure of the server components."""
     print(f"[analyze_github_repo] Starting analysis for URL: {url}")
     try:
         owner, repo = extract_owner_repo(url)

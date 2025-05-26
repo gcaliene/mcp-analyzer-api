@@ -138,7 +138,7 @@ def analyze_files_advanced(owner: str, repo: str, path: str = "") -> list[dict]:
     results = []
     ignore_exts = {"md", "json", "toml", "ini", "env", "cfg", "conf", "yml", "yaml"}
     ignore_names = {"Dockerfile"}
-    ignore_patterns = ["docker-compose", ".github/", ".gitlab/", ".github", ".gitlab", "third-party"]
+    ignore_patterns = ["docker-compose", ".github/", ".gitlab/", ".github", ".gitlab", "third-party/"]
     code_exts = {"py", "js", "ts", "java", "go", "rb", "php", "cpp", "c", "cs"}
     for f in files:
         ext = f['name'].split('.')[-1] if '.' in f['name'] else ''
