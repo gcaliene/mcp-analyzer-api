@@ -1,4 +1,4 @@
-# coretext-interview-project
+# MCP Analyzer API
 
 ## Running with Docker
 
@@ -12,12 +12,12 @@
 
 2. **Build the Docker image:**
    ```sh
-   docker build -t coretext-interview-project .
+   docker build -t mcp-analyzer-api .
    ```
 
 3. **Run the container:**
    ```sh
-   docker run --env-file .env -p 8001:8001 coretext-interview-project
+   docker run --env-file .env -p 8001:8001 mcp-analyzer-api
    ```
    - The FastAPI client will be available at [http://localhost:8001](http://localhost:8001)
    - The GitHub analysis server runs internally on port 8000
