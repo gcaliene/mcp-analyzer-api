@@ -31,7 +31,14 @@ async def lifespan(app):
             "linear": {
                 "command": "npx",
                 "args": [
-                    "-y", "mcp-remote", "https://mcp.linear.app/sse"
+                    "-y", "mcp-remote", "https://mcp.linear.app/sse" 
+                ],
+                "transport": "stdio",
+            },
+            "gerson":{
+                "command": "npx",
+                "args": [
+                    "-y", "mcp-remote", "https://mcp-auth0-oidc.gerson-398.workers.dev/sse"
                 ],
                 "transport": "stdio",
             }
