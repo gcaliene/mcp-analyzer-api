@@ -33,7 +33,25 @@ linear_access_token = None
 
 @asynccontextmanager
 async def lifespan(app):
-    # Do not block on OAuth here!
+    app.state.client = MultiServerMCPClient(
+        {
+            "github_analysis": {
+                "url": "http://localhost:8000/sse",
+                "transport": "sse",
+            },
+            "linear": {
+                "command": "npx",
+                "args": [
+                    "-y", "mcp-remote", "https://mcp.linear.app/sse"
+                ],
+                "transport": "stdio",
+            }
+        }
+    )
+    app.state.tools = await app.state.client.get_tools()
+    for tool in app.state.tools:
+        print(f"Tool: {tool.name}\n  Description: {tool.description}\n")
+    app.state.agent = create_react_agent(llm, app.state.tools)
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -62,66 +80,4 @@ async def ask(request: AskRequest):
         print('api route', result)
         return JSONResponse({"response": result["messages"][-1].content})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/oauth/login")
-def oauth_login():
-    print("oauth_login", LINEAR_CLIENT_ID, LINEAR_REDIRECT_URI, OAUTH_SCOPES)
-    params = {
-        "client_id": LINEAR_CLIENT_ID,
-        "redirect_uri": LINEAR_REDIRECT_URI,
-        "response_type": "code",
-        "scope": OAUTH_SCOPES,
-        "actor": "user",
-        # "state": "secure_random_state",  # Replace with real CSRF protection
-    }
-    url = f"https://linear.app/oauth/authorize?{urllib.parse.urlencode(params)}"
-    print("oauth_login", url)
-    return RedirectResponse(url)
-
-@app.get("/oauth/callback")
-async def oauth_callback(request: Request):
-    global linear_access_token
-    code = request.query_params.get("code")
-    state = request.query_params.get("state")
-    if not code:
-        return JSONResponse({"error": "Missing code"}, status_code=400)
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://api.linear.app/oauth/token",
-            data={
-                "code": code,
-                "redirect_uri": LINEAR_REDIRECT_URI,
-                "client_id": LINEAR_CLIENT_ID,
-                "client_secret": LINEAR_CLIENT_SECRET,
-                "grant_type": "authorization_code",
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        print("oauth_callback", data["access_token"])
-        linear_access_token = data["access_token"]
-
-    # Initialize the client and agent now that we have the token
-    app.state.client = MultiServerMCPClient(
-        {
-            "github_analysis": {
-                "url": "http://localhost:8000/sse",
-                "transport": "sse",
-            },
-            "linear": {
-                "command": "npx",
-                "args": [
-                    "-y", "mcp-remote", "https://mcp.linear.app/sse"
-                ],
-                "transport": "stdio",
-            }
-        }
-    )
-    app.state.tools = await app.state.client.get_tools()
-    for tool in app.state.tools:
-        print(f"Tool: {tool.name}\n  Description : {tool.description}\n")
-    app.state.agent = create_react_agent(llm, app.state.tools)
-
-    return JSONResponse({"message": "OAuth successful. You can now use the /ask endpoint."}) 
+        raise HTTPException(status_code=500, detail=str(e)) 
