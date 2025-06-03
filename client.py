@@ -28,17 +28,26 @@ async def lifespan(app):
                 "url": "http://localhost:8000/sse",
                 "transport": "sse",
             },
+            "linear": {
+                "command": "npx",
+                "args": [
+                    "-y", "mcp-remote", "https://mcp.linear.app/sse"
+                ],
+                "transport": "stdio",
+            }
         }
     )
     app.state.tools = await app.state.client.get_tools()
+    app.state.tools = [tool for tool in app.state.tools if tool.name != 'create_issue']
+    for tool in app.state.tools:
+        print(f"Tool: {tool.name}\n  Description: {tool.description}\n")
     app.state.agent = create_react_agent(llm, app.state.tools)
-    yield  # Startup done
-    # (Optional) Add cleanup code here
+    yield
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or specify your frontend URL
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,8 +61,8 @@ async def ask(request: AskRequest):
     try:
         agent = app.state.agent
         print("ask", request.messages)
-        prompt_template = f"""List all MCP tools (include descriptions and parameters), prompts, and resources from this url: {request.messages}, along with the hierarchical structure of the server components. Prioritize listing all MCP tools with descriptions and its' parameters."""
-        result = await agent.ainvoke({"messages": prompt_template})
+        system_prompt = "You are a helpful assistant that can answer questions and help with tasks."
+        result = await agent.ainvoke({"messages": request.messages, "system": system_prompt })
         print('api route', result)
         return JSONResponse({"response": result["messages"][-1].content})
     except Exception as e:

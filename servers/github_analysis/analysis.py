@@ -2,139 +2,43 @@ from servers.github_analysis.utils import should_ignore_test_file, GITHUB_API_UR
 import requests
 import re
 from urllib.parse import quote
+from servers.github_analysis.language_analysis import (
+    extract_python, extract_go, extract_js, extract_ts, extract_java, extract_cs, extract_rb, extract_php, extract_cpp, extract_c
+)
 
 IGNORE_DIRS = {'third-party'}
 
+EXTRACTORS = {
+    'py': extract_python,
+    'go': extract_go,
+    'js': extract_js,
+    'ts': extract_ts,
+    'java': extract_java,
+    'cs': extract_cs,
+    'rb': extract_rb,
+    'php': extract_php,
+    'cpp': extract_cpp,
+    'c': extract_c,
+}
+
 def analyze_code_unified(source: str, filetype: str) -> dict:
-    patterns = {
-        'py': r'def\s+(\w+)\s*\(([^)]*)\)',
-        'js': r'function\s+(\w+)\s*\(([^)]*)\)',
-        'ts': r'function\s+(\w+)\s*\(([^)]*)\)',
-        'java': r'(?:public|private|protected)?\s*(?:static)?\s*\w+\s+(\w+)\s*\(([^)]*)\)',
-        'go': r'func\s+(\w+)\s*\(([^)]*)\)',
-        'rb': r'def\s+(\w+)\s*\(([^)]*)\)',
-        'php': r'function\s+(\w+)\s*\(([^)]*)\)',
-        'cpp': r'(?:\w+\s+)+?(\w+)\s*\(([^)]*)\)\s*\{',
-        'c': r'(?:\w+\s+)+?(\w+)\s*\(([^)]*)\)\s*\{',
-        'cs': r'(?:public|private|protected)?\s*(?:static)?\s*\w+\s+(\w+)\s*\(([^)]*)\)',
-    }
-    mcp_patterns = {
-        'py': r'@mcp\.tool\s*\(',
-        'go': r'mcp\.NewTool\(',
-        'js': r'mcp\.newTool\(',
-        'ts': r'mcp\.newTool\(',
-        'java': r'new\s+MCPTool\(',
-        'cs': r'new\s+MCPTool\(',
-    }
-    pattern = patterns.get(filetype, r'(\w+)\s*\(([^)]*)\)')
-    mcp_pattern = mcp_patterns.get(filetype)
-    functions = []
+    extractor = EXTRACTORS.get(filetype)
+    functions = extractor(source) if extractor else []
     prompts = []
     resources = []
     lines = source.splitlines()
-    if filetype == 'go' or filetype in {'js', 'ts', 'java', 'cs'}:
-        func_indices = []
-        for i, line in enumerate(lines):
-            match = re.match(pattern, line)
-            if match:
-                func_indices.append((i, match.group(1), match.group(2)))
-        func_indices.append((len(lines), None, None))
-        for idx in range(len(func_indices) - 1):
-            start, name, params = func_indices[idx]
-            end = func_indices[idx + 1][0]
-            body = '\n'.join(lines[start:end])
-            doc = ''
-            for j in range(start-1, max(start-4, -1), -1):
-                comment_line = lines[j].strip()
-                if comment_line.startswith('//') or comment_line.startswith('/*') or comment_line.startswith('*'):
-                    doc = comment_line + '\n' + doc
-                else:
-                    break
-            if mcp_pattern and re.search(mcp_pattern, body):
-                param_list = [p.strip() for p in params.split(',') if p.strip()]
-                functions.append({
-                    'name': name,
-                    'params': param_list,
-                    'description': doc.strip()
-                })
-            if 'mcp.NewTool' in body:
-                tool_name_match = re.search(r'mcp.NewTool\(["\']([\w_]+)["\']', body)
-                tool_name = tool_name_match.group(1) if tool_name_match else name
-                desc_match = re.search(r'mcp.WithDescription\([^\)]*["\'](.+?)["\']', body)
-                tool_desc = desc_match.group(1) if desc_match else ''
-                param_pattern = re.compile(r'mcp.With(?:String|Number|Bool|Int|Float)\(["\']([\w_]+)["\'][^)]*mcp.Description\(["\'](.+?)["\']', re.DOTALL)
-                parameters = []
-                for p_match in param_pattern.finditer(body):
-                    pname, pdesc = p_match.group(1), p_match.group(2)
-                    parameters.append({"name": pname, "description": pdesc})
-                functions.append({
-                    'name': tool_name,
-                    'parameters': parameters,
-                    'description': tool_desc
-                })
-    elif filetype == 'py':
-        for i, line in enumerate(lines):
-            if re.match(r'@mcp\.tool\s*\(', line.strip()):
-                for j in range(i+1, min(i+6, len(lines))):
-                    match = re.match(pattern, lines[j])
-                    if match:
-                        name = match.group(1)
-                        params = match.group(2)
-                        doc = ''
-                        for k in range(j-1, max(j-4, -1), -1):
-                            comment_line = lines[k].strip()
-                            if comment_line.startswith('#') or comment_line.startswith('"""'):
-                                doc = comment_line + '\n' + doc
-                            else:
-                                break
-                        param_list = [p.strip() for p in params.split(',') if p.strip()]
-                        functions.append({
-                            'name': name,
-                            'params': param_list,
-                            'description': doc.strip()
-                        })
-                        break
-            assign_match = re.match(r'\s*(\w+)\s*[=:]', line)
-            if assign_match:
-                var_name = assign_match.group(1).lower()
-                if (
-                    var_name == 'prompt' or var_name.endswith('_prompt') or var_name == 'prompts' or var_name.endswith('_prompts')
-                ):
-                    prompts.append({'name': assign_match.group(1)})
-                if (
-                    var_name == 'resource' or var_name.endswith('_resource') or var_name == 'resources' or var_name.endswith('_resources')
-                ):
-                    resources.append({'name': assign_match.group(1)})
-    else:
-        for i, line in enumerate(lines):
-            match = re.search(pattern, line)
-            if match:
-                name = match.group(1)
-                params = match.group(2)
-                doc = ''
-                for j in range(i-1, max(i-4, -1), -1):
-                    comment_line = lines[j].strip()
-                    if comment_line.startswith('#') or comment_line.startswith('//') or comment_line.startswith('/*') or comment_line.startswith('*'):
-                        doc = comment_line + '\n' + doc
-                    else:
-                        break
-                param_list = [p.strip() for p in params.split(',') if p.strip()]
-                functions.append({
-                    'name': name,
-                    'params': param_list,
-                    'description': doc.strip()
-                })
-            assign_match = re.match(r'\s*(\w+)\s*[=:]', line)
-            if assign_match:
-                var_name = assign_match.group(1).lower()
-                if (
-                    var_name == 'prompt' or var_name.endswith('_prompt') or var_name == 'prompts' or var_name.endswith('_prompts')
-                ):
-                    prompts.append({'name': assign_match.group(1)})
-                if (
-                    var_name == 'resource' or var_name.endswith('_resource') or var_name == 'resources' or var_name.endswith('_resources')
-                ):
-                    resources.append({'name': assign_match.group(1)})
+    for line in lines:
+        assign_match = re.match(r'\s*(\w+)\s*[=:]', line)
+        if assign_match:
+            var_name = assign_match.group(1).lower()
+            if (
+                var_name == 'prompt' or var_name.endswith('_prompt') or var_name == 'prompts' or var_name.endswith('_prompts')
+            ):
+                prompts.append({'name': assign_match.group(1)})
+            if (
+                var_name == 'resource' or var_name.endswith('_resource') or var_name == 'resources' or var_name.endswith('_resources')
+            ):
+                resources.append({'name': assign_match.group(1)})
     result = {'tools': functions, 'prompts': prompts, 'resources': resources}
     print("analyze_code_unified", result)
     return result
