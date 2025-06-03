@@ -57,8 +57,8 @@ async def ask(request: AskRequest):
         # System prompt: You are a helpful assistant that can answer questions and help with tasks.
         # User prompt: {request.messages}
         system_prompt = "You are a helpful assistant that can answer questions and help with tasks."
-        prompt_template = f"""List all MCP tools (include descriptions and parameters), prompts, and resources from this url: {request.messages}, along with the hierarchical structure of the server components. Prioritize listing all MCP tools with descriptions and its' parameters."""
-        result = await agent.ainvoke({"messages": prompt_template, "system": system_prompt })
+        # prompt_template = f"""List all MCP tools (include descriptions and parameters), prompts, and resources from this url: {request.messages}, along with the hierarchical structure of the server components. Prioritize listing all MCP tools with descriptions and its' parameters."""
+        result = await agent.ainvoke({"messages": request.messages, "system": system_prompt })
         print('api route', result)
         return JSONResponse({"response": result["messages"][-1].content})
     except Exception as e:
@@ -115,12 +115,13 @@ async def oauth_callback(request: Request):
                 "args": [
                     "-y", "mcp-remote", "https://mcp.linear.app/sse"
                 ],
-                "transport": "stdio",  # or "subprocess" if that's what your client expects
+                "transport": "stdio",
             }
         }
     )
     app.state.tools = await app.state.client.get_tools()
-    print("tools", app.state.tools)
+    for tool in app.state.tools:
+        print(f"Tool: {tool.name}\n  Description : {tool.description}\n")
     app.state.agent = create_react_agent(llm, app.state.tools)
 
     return JSONResponse({"message": "OAuth successful. You can now use the /ask endpoint."}) 
