@@ -54,6 +54,10 @@ registered_tool_proxies = {}
 
 def make_tool_proxy(tool):
     async def tool_proxy(**kwargs):
+        caller = kwargs.pop("caller", None)
+        if caller != "ask":
+            logging.warning(f"Tool '{tool.name}' called directly, not via 'ask'. Failing fast.")
+            return {"error": f"Tool '{tool.name}' must be called via the 'ask' tool."}
         logging.info(f"Tool called: {tool.name} with args: {kwargs}")
         return await tool.invoke(**kwargs)
     tool_proxy.__name__ = tool.name
