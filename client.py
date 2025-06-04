@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from dotenv import load_dotenv
+from langchain_core.messages import SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
@@ -42,7 +43,10 @@ async def get_tools_and_agent():
     )
     tools = await client.get_tools()
     tools = [tool for tool in tools if tool.name != 'create_issue']
-    agent = create_react_agent(llm, tools)
+    system_prompt = SystemMessage(
+        content="You are a helpful assistant. You must always call the 'ask' tool first as using any other tools before using the ask tool will result in an error."
+    )
+    agent = create_react_agent(llm, tools, prompt=system_prompt)
     return tools, agent
 
 # Store references to proxies to avoid late binding issues
@@ -66,10 +70,14 @@ async def register_dynamic_tools():
     # Register the agent as a tool
     async def ask(messages: list):
         logging.info(f"Agent 'ask' called with messages: {messages}")
-        system_prompt = "You are a helpful assistant that can answer questions and help with tasks."
+        system_prompt = "You are a helpful assistant that can answer questions and help with tasks. You will always use the ask tool first to access the tools."
+        logging.info("Calling LLM agent with user messages...")
         result = await agent.ainvoke({"messages": messages, "system": system_prompt})
-        return {"response": result["messages"][-1].content}
-    mcp.tool(name="ask", description="LLM agent that routes to all available tools.")(ask)
+        logging.info(f"LLM agent response: {result}")
+        response_content = result["messages"][-1].content if result.get("messages") else None
+        logging.info(f"Returning response to user: {response_content}")
+        return {"response": response_content}
+    mcp.tool(name="ask", description="The first tool to always be called when talking to LLM agent that routes to all available tools.")(ask)
 
 if __name__ == "__main__":
     asyncio.run(register_dynamic_tools())
