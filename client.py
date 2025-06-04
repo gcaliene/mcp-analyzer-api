@@ -38,11 +38,21 @@ async def get_tools_and_agent():
                     "-y", "mcp-remote", "https://mcp-auth0-oidc.gerson-398.workers.dev/sse"
                 ],
                 "transport": "stdio",
+            },
+            "cloudflare":{
+                "command": "npx",
+                "args": [
+                    "-y", "mcp-remote", "https://docs.mcp.cloudflare.com/sse"
+                ],
+                "transport": "stdio",
             }
         }
     )
     tools = await client.get_tools()
     tools = [tool for tool in tools if tool.name != 'create_issue']
+    logging.info(f"Available tools: {[tool.name for tool in tools]}")
+    for tool in tools:
+        logging.info(f"Tool: {tool.name} - {tool.description}")
     system_prompt = SystemMessage(
         content="You are a helpful assistant. You must always call the 'ask' tool first as using any other tools before using the ask tool will result in an error."
     )
@@ -71,6 +81,7 @@ async def register_dynamic_tools():
         proxy = make_tool_proxy(tool)
         registered_tool_proxies[tool.name] = proxy
         mcp.tool(name=tool.name, description=tool.description)(proxy)
+    logging.info(f"Registered tools: {[tool.name for tool in tools]}")
     # Register the agent as a tool
     async def ask(messages: list):
         logging.info(f"Agent 'ask' called with messages: {messages}")
