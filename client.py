@@ -42,7 +42,7 @@ async def get_tools_and_agent():
             "cloudflare":{
                 "command": "npx",
                 "args": [
-                    "-y", "mcp-remote", "https://docs.mcp.cloudflare.com/sse"
+                    "-y", "mcp-remote", "https://docs.mcp.cloudflare.com/sse",
                 ],
                 "transport": "stdio",
             }
@@ -82,10 +82,11 @@ async def register_dynamic_tools():
         registered_tool_proxies[tool.name] = proxy
         mcp.tool(name=tool.name, description=tool.description)(proxy)
     logging.info(f"Registered tools: {[tool.name for tool in tools]}")
+    print(os.environ["ANTHROPIC_API_KEY"])
     # Register the agent as a tool
     async def ask(messages: list):
         logging.info(f"Agent 'ask' called with messages: {messages}")
-        system_prompt = "You are a helpful assistant that can answer questions and help with tasks. You will always use the ask tool first to access the tools."
+        system_prompt = "You are a helpful assistant that can answer questions and help with tasks. Check wih the with tools first. You will always use the ask tool first to access the tools."
         logging.info("Calling LLM agent with user messages...")
         result = await agent.ainvoke({"messages": messages, "system": system_prompt})
         logging.info(f"LLM agent response: {result}")
