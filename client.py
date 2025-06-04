@@ -1,15 +1,12 @@
 import asyncio
+import logging
 from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 import os
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Any
-from contextlib import asynccontextmanager
+from mcp.server.fastmcp import FastMCP
+import inspect
 
 load_dotenv()
 
@@ -18,16 +15,15 @@ llm = ChatAnthropic(
     model="claude-3-5-sonnet-20240620"
 )
 
-app = FastAPI()
+mcp = FastMCP("Aggregated MCP Server")
 
-@asynccontextmanager
-async def lifespan(app):
-    app.state.client = MultiServerMCPClient(
+async def get_tools_and_agent():
+    client = MultiServerMCPClient(
         {
-            "github_analysis": {
-                "url": "http://localhost:8000/sse",
-                "transport": "sse",
-            },
+            # "github_analysis": {
+            #     "url": "http://localhost:8000/sse",
+            #     "transport": "sse",
+            # },
             "linear": {
                 "command": "npx",
                 "args": [
@@ -44,33 +40,37 @@ async def lifespan(app):
             }
         }
     )
-    app.state.tools = await app.state.client.get_tools()
-    app.state.tools = [tool for tool in app.state.tools if tool.name != 'create_issue']
-    for tool in app.state.tools:
-        print(f"Tool: {tool.name}\n  Description: {tool.description}\n")
-    app.state.agent = create_react_agent(llm, app.state.tools)
-    yield
+    tools = await client.get_tools()
+    tools = [tool for tool in tools if tool.name != 'create_issue']
+    agent = create_react_agent(llm, tools)
+    return tools, agent
 
-app = FastAPI(lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Store references to proxies to avoid late binding issues
+registered_tool_proxies = {}
 
-class AskRequest(BaseModel):
-    messages: Any
+def make_tool_proxy(tool):
+    async def tool_proxy(**kwargs):
+        logging.info(f"Tool called: {tool.name} with args: {kwargs}")
+        return await tool.invoke(**kwargs)
+    tool_proxy.__name__ = tool.name
+    tool_proxy.__doc__ = tool.description
+    return tool_proxy
 
-@app.post("/ask")
-async def ask(request: AskRequest):
-    try:
-        agent = app.state.agent
-        print("ask", request.messages)
+async def register_dynamic_tools():
+    tools, agent = await get_tools_and_agent()
+    # Register each tool as a proxy
+    for tool in tools:
+        proxy = make_tool_proxy(tool)
+        registered_tool_proxies[tool.name] = proxy
+        mcp.tool(name=tool.name, description=tool.description)(proxy)
+    # Register the agent as a tool
+    async def ask(messages: list):
+        logging.info(f"Agent 'ask' called with messages: {messages}")
         system_prompt = "You are a helpful assistant that can answer questions and help with tasks."
-        result = await agent.ainvoke({"messages": request.messages, "system": system_prompt })
-        print('api route', result)
-        return JSONResponse({"response": result["messages"][-1].content})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        result = await agent.ainvoke({"messages": messages, "system": system_prompt})
+        return {"response": result["messages"][-1].content}
+    mcp.tool(name="ask", description="LLM agent that routes to all available tools.")(ask)
+
+if __name__ == "__main__":
+    asyncio.run(register_dynamic_tools())
+    mcp.run(transport="sse")
