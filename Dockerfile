@@ -18,12 +18,8 @@ COPY . .
 # Install Python dependencies
 RUN uv pip install --system --no-cache-dir -r pyproject.toml
 
-# Copy entrypoint script
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
-
 # Expose FastAPI client port
 EXPOSE 8001
 
-# Entrypoint
-ENTRYPOINT ["/docker-entrypoint.sh"] 
+# Default command: run the client
+ENTRYPOINT ["python", "client.py"] 
