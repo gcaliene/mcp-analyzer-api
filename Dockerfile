@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1
 FROM python:3.13-slim
 
+# Install Node.js (includes npx)
+RUN apt-get update && apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+    
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \

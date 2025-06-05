@@ -6,8 +6,12 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 import os
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 import inspect
+from starlette.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+import uuid
 
 load_dotenv()
 
@@ -18,6 +22,10 @@ llm = ChatAnthropic(
 
 mcp = FastMCP("Aggregated MCP Server")
 
+print(os.environ["ANTHROPIC_API_KEY"])
+
+SESSION_ID = str(uuid.uuid4())
+
 async def get_tools_and_agent():
     client = MultiServerMCPClient(
         {
@@ -25,20 +33,20 @@ async def get_tools_and_agent():
             #     "url": "http://localhost:8000/sse",
             #     "transport": "sse",
             # },
-            "linear": {
-                "command": "npx",
-                "args": [
-                    "-y", "mcp-remote", "https://mcp.linear.app/sse" 
-                ],
-                "transport": "stdio",
-            },
-            "gerson":{
-                "command": "npx",
-                "args": [
-                    "-y", "mcp-remote", "https://mcp-auth0-oidc.gerson-398.workers.dev/sse"
-                ],
-                "transport": "stdio",
-            },
+            # "linear": {
+            #     "command": "npx",
+            #     "args": [
+            #         "-y", "mcp-remote", "https://mcp.linear.app/sse",
+            #     ],
+            #     "transport": "stdio",
+            # },
+            # "gerson":{
+            #     "command": "npx",
+            #     "args": [
+            #         "-y", "mcp-remote", "https://mcp-auth0-oidc.gerson-398.workers.dev/sse"
+            #     ],
+            #     "transport": "stdio",
+            # },
             "cloudflare":{
                 "command": "npx",
                 "args": [
@@ -49,7 +57,7 @@ async def get_tools_and_agent():
         }
     )
     tools = await client.get_tools()
-    tools = [tool for tool in tools if tool.name != 'create_issue']
+    tools = [tool for tool in tools if tool.name != 'list_comments']
     logging.info(f"Available tools: {[tool.name for tool in tools]}")
     for tool in tools:
         logging.info(f"Tool: {tool.name} - {tool.description}")
@@ -84,16 +92,41 @@ async def register_dynamic_tools():
     logging.info(f"Registered tools: {[tool.name for tool in tools]}")
     print(os.environ["ANTHROPIC_API_KEY"])
     # Register the agent as a tool
-    async def ask(messages: list):
-        logging.info(f"Agent 'ask' called with messages: {messages}")
+    async def ask(messages: list, ctx: Context):
+        # print("ctx", ctx.info())
+        user_id = get_current_user_id(ctx)
+        print("user_id", user_id)
+        try:
+            print("ctx", await ctx.info('test'))
+        except Exception as e:
+            print("ctx", e)
+        await ctx.info(f"User {user_id} called the ask tool with messages: {messages}")
         system_prompt = "You are a helpful assistant that can answer questions and help with tasks. Check wih the with tools first. You will always use the ask tool first to access the tools."
         logging.info("Calling LLM agent with user messages...")
         result = await agent.ainvoke({"messages": messages, "system": system_prompt})
         logging.info(f"LLM agent response: {result}")
         response_content = result["messages"][-1].content if result.get("messages") else None
-        logging.info(f"Returning response to user: {response_content}")
+        await ctx.info(f"User {user_id} received response from ask tool: {response_content}")
         return {"response": response_content}
     mcp.tool(name="ask", description="The first tool to always be called when talking to LLM agent that routes to all available tools.")(ask)
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request):
+    return JSONResponse({"status": "ok"})
+
+def get_current_user_id(ctx: Context) -> str:
+    # For local/dev, just return a session id
+    return SESSION_ID
+
+@mcp.tool()
+async def process_data(uri: str, ctx: Context):
+    user_id = get_current_user_id(ctx)
+    await ctx.info(f"User {user_id} processing data from {uri}...")
+    # Simulate data processing (replace with your logic)
+    # data = await ctx.read_resource(uri)
+    # summary = await ctx.sample(f"Summarize: {data.content[:500]}")
+    await ctx.info(f"User {user_id} finished processing data from {uri}.")
+    return {"status": "done", "uri": uri}
 
 if __name__ == "__main__":
     asyncio.run(register_dynamic_tools())
